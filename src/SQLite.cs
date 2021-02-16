@@ -35,7 +35,8 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Text;
 using System.Threading;
-
+using SQLBase.Sync;
+using SQLBase.Sync.Enums;
 #if USE_CSHARP_SQLITE
 using Sqlite3 = Community.CsharpSqlite.Sqlite3;
 using Sqlite3DatabaseHandle = Community.CsharpSqlite.Sqlite3.sqlite3;
@@ -49,10 +50,12 @@ using Sqlite3DatabaseHandle = SQLitePCL.sqlite3;
 using Sqlite3BackupHandle = SQLitePCL.sqlite3_backup;
 using Sqlite3Statement = SQLitePCL.sqlite3_stmt;
 using Sqlite3 = SQLitePCL.raw;
+using SQLBase;
 #else
 using Sqlite3DatabaseHandle = System.IntPtr;
 using Sqlite3BackupHandle = System.IntPtr;
 using Sqlite3Statement = System.IntPtr;
+using SQLBase;
 #endif
 
 #pragma warning disable 1591 // XML Doc Comments
@@ -908,6 +911,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// Use this method instead of Query when you don't expect rows back. Such cases include
@@ -948,6 +952,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// Use this method when return primitive values.
@@ -987,6 +992,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// It returns each row of the result using the mapping automatically generated for
@@ -1008,6 +1014,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// It returns the first column of each row of the result.
@@ -1028,6 +1035,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// /// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// It returns each row of the result using the mapping automatically generated for
@@ -1052,6 +1060,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// It returns each row of the result using the specified mapping. This function is
@@ -1078,6 +1087,7 @@ namespace SQLite
 		}
 
 		/// <summary>
+		/// WARNING: Changes made through this method will not be tracked on history.
 		/// Creates a SQLiteCommand given the command text (SQL) with arguments. Place a '?'
 		/// in the command text for each of the arguments and then executes that command.
 		/// It returns each row of the result using the specified mapping. This function is
@@ -1273,6 +1283,15 @@ namespace SQLite
 		public bool IsInTransaction {
 			get { return _transactionDepth > 0; }
 		}
+
+		/// <summary>
+		/// Whether <see cref="SQLiteConnection"/> has been disposed and the database is closed.
+		/// </summary>
+		public bool IsClosed {
+			get => !_open;
+
+		}
+
 
 		/// <summary>
 		/// Begins a new transaction. Call <see cref="Commit"/> to end the transaction.
@@ -1741,6 +1760,11 @@ namespace SQLite
 				}
 			}
 
+			if (map.SyncGuid is TableMapping.GuidColumn SyncGuid) {
+				SyncGuid.SetValue (null, null);
+			}
+
+
 			var replacing = string.Compare (extra, "OR REPLACE", StringComparison.OrdinalIgnoreCase) == 0;
 
 			var cols = replacing ? map.InsertOrReplaceColumns : map.InsertColumns;
@@ -1879,7 +1903,7 @@ namespace SQLite
 			}
 
 			var cols = from p in map.Columns
-					   where p != pk
+					   where p != pk && !(p is TableMapping.GuidColumn)
 					   select p;
 			var vals = from c in cols
 					   select c.GetValue (obj);
@@ -1908,8 +1932,11 @@ namespace SQLite
 				throw ex;
 			}
 
-			if (rowsAffected > 0)
+			if (rowsAffected > 0) {
+				map.SyncGuid.SetValue (obj, ExecuteScalar<Guid> (
+					$"SELECT SyncGuid from {map.TableName} where {map.PK.Name}=?", map.PK.GetValue (obj)));
 				OnTableChanged (map, NotifyTableChangedAction.Update);
+			}
 
 			return rowsAffected;
 		}
@@ -1961,6 +1988,10 @@ namespace SQLite
 				throw new NotSupportedException ("Cannot delete " + map.TableName + ": it has no PK");
 			}
 			var q = string.Format ("delete from \"{0}\" where \"{1}\" = ?", map.TableName, pk.Name);
+
+			map.SyncGuid.SetValue (objectToDelete, ExecuteScalar<Guid> (
+				$"SELECT SyncGuid from {map.TableName} where {map.PK.Name}=?", map.PK.GetValue (objectToDelete)));
+
 			var count = Execute (q, pk.GetValue (objectToDelete));
 			if (count > 0)
 				OnTableChanged (map, NotifyTableChangedAction.Delete);
@@ -2003,6 +2034,8 @@ namespace SQLite
 				throw new NotSupportedException ("Cannot delete " + map.TableName + ": it has no PK");
 			}
 			var q = string.Format ("delete from \"{0}\" where \"{1}\" = ?", map.TableName, pk.Name);
+			map.SyncGuid.SetValue (null, ExecuteScalar<Guid> (
+				$"SELECT SyncGuid from {map.TableName} where {map.PK.Name}=?", primaryKey));
 			var count = Execute (q, primaryKey);
 			if (count > 0)
 				OnTableChanged (map, NotifyTableChangedAction.Delete);
@@ -2040,6 +2073,7 @@ namespace SQLite
 		public int DeleteAll (TableMapping map)
 		{
 			var query = string.Format ("delete from \"{0}\"", map.TableName);
+			OnTableDeleteAll (map);
 			var count = Execute (query);
 			if (count > 0)
 				OnTableChanged (map, NotifyTableChangedAction.Delete);
@@ -2130,15 +2164,36 @@ namespace SQLite
 				}
 			}
 		}
+		public event EventHandler<NotifyTableChangedEventArgs> TableChanged;
 
+		void OnTableDeleteAll (TableMapping table)
+		{
+			Table<ChangesHistory> ().Delete (x => x.TableName == table.TableName);
+			QueryScalars<Guid> ($"SELECT SyncGuid FROM {table.TableName}")
+				.ForEach (x => Insert (new ChangesHistory (table.TableName, x, NotifyTableChangedAction.Delete)));
+		}
 		void OnTableChanged (TableMapping table, NotifyTableChangedAction action)
 		{
+			if (table.TableName == "VersionControl") {
+				return;
+			}
+
+			UpdateVersionControl (new ChangesHistory (
+				table.TableName
+				, (Guid)table.SyncGuid.GetValue (null)
+				, action));
 			var ev = TableChanged;
 			if (ev != null)
 				ev (this, new NotifyTableChangedEventArgs (table, action));
 		}
 
-		public event EventHandler<NotifyTableChangedEventArgs> TableChanged;
+		void UpdateVersionControl (ChangesHistory VersionControl)
+		{
+			Table<ChangesHistory> ()
+				.Delete (x => x.SyncGuid == VersionControl.SyncGuid);
+			Insert (VersionControl);
+		}
+
 	}
 
 	public class NotifyTableChangedEventArgs : EventArgs
@@ -2153,12 +2208,13 @@ namespace SQLite
 		}
 	}
 
-	public enum NotifyTableChangedAction
-	{
-		Insert,
-		Update,
-		Delete,
-	}
+	//[StoreAsText]
+	//public enum NotifyTableChangedAction
+	//{
+	//	Insert,
+	//	Update,
+	//	Delete,
+	//}
 
 	/// <summary>
 	/// Represents a parsed connection string.
@@ -2310,119 +2366,7 @@ namespace SQLite
 		}
 	}
 
-	[AttributeUsage (AttributeTargets.Class)]
-	public class TableAttribute : Attribute
-	{
-		public string Name { get; set; }
 
-		/// <summary>
-		/// Flag whether to create the table without rowid (see https://sqlite.org/withoutrowid.html)
-		///
-		/// The default is <c>false</c> so that sqlite adds an implicit <c>rowid</c> to every table created.
-		/// </summary>
-		public bool WithoutRowId { get; set; }
-
-		public TableAttribute (string name)
-		{
-			Name = name;
-		}
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class ColumnAttribute : Attribute
-	{
-		public string Name { get; set; }
-
-		public ColumnAttribute (string name)
-		{
-			Name = name;
-		}
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class PrimaryKeyAttribute : Attribute
-	{
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class AutoIncrementAttribute : Attribute
-	{
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class IndexedAttribute : Attribute
-	{
-		public string Name { get; set; }
-		public int Order { get; set; }
-		public virtual bool Unique { get; set; }
-
-		public IndexedAttribute ()
-		{
-		}
-
-		public IndexedAttribute (string name, int order)
-		{
-			Name = name;
-			Order = order;
-		}
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class IgnoreAttribute : Attribute
-	{
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class UniqueAttribute : IndexedAttribute
-	{
-		public override bool Unique {
-			get { return true; }
-			set { /* throw?  */ }
-		}
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class MaxLengthAttribute : Attribute
-	{
-		public int Value { get; private set; }
-
-		public MaxLengthAttribute (int length)
-		{
-			Value = length;
-		}
-	}
-
-	public sealed class PreserveAttribute : System.Attribute
-	{
-		public bool AllMembers;
-		public bool Conditional;
-	}
-
-	/// <summary>
-	/// Select the collating sequence to use on a column.
-	/// "BINARY", "NOCASE", and "RTRIM" are supported.
-	/// "BINARY" is the default.
-	/// </summary>
-	[AttributeUsage (AttributeTargets.Property)]
-	public class CollationAttribute : Attribute
-	{
-		public string Value { get; private set; }
-
-		public CollationAttribute (string collation)
-		{
-			Value = collation;
-		}
-	}
-
-	[AttributeUsage (AttributeTargets.Property)]
-	public class NotNullAttribute : Attribute
-	{
-	}
-
-	[AttributeUsage (AttributeTargets.Enum)]
-	public class StoreAsTextAttribute : Attribute
-	{
-	}
 
 	public class TableMapping
 	{
@@ -2435,6 +2379,7 @@ namespace SQLite
 		public Column[] Columns { get; private set; }
 
 		public Column PK { get; private set; }
+		public Column SyncGuid { get; private set; }
 
 		public string GetByPrimaryKeySql { get; private set; }
 
@@ -2491,8 +2436,8 @@ namespace SQLite
 					cols.Add (new Column (p, createFlags));
 				}
 			}
-			Columns = cols.ToArray ();
-			foreach (var c in Columns) {
+
+			foreach (var c in cols) {
 				if (c.IsAutoInc && c.IsPK) {
 					_autoPk = c;
 				}
@@ -2510,6 +2455,16 @@ namespace SQLite
 				// People should not be calling Get/Find without a PK
 				GetByPrimaryKeySql = string.Format ("select * from \"{0}\" limit 1", TableName);
 			}
+
+			if (cols.FirstOrDefault (x => x.Name == "SyncGuid") is Column syncguidcol) {
+				this.SyncGuid = syncguidcol;
+			}
+			else {
+				this.SyncGuid = new GuidColumn ();
+				cols.Add (this.SyncGuid);
+			}
+
+			Columns = cols.ToArray ();
 
 			_insertColumns = Columns.Where (c => !c.IsAutoInc).ToArray ();
 			_insertOrReplaceColumns = Columns.ToArray ();
@@ -2552,29 +2507,30 @@ namespace SQLite
 		{
 			PropertyInfo _prop;
 
-			public string Name { get; private set; }
+			public string Name { get; protected set; }
 
 			public PropertyInfo PropertyInfo => _prop;
 
 			public string PropertyName { get { return _prop.Name; } }
 
-			public Type ColumnType { get; private set; }
+			public Type ColumnType { get; protected set; }
 
-			public string Collation { get; private set; }
+			public string Collation { get; protected set; }
 
 			public bool IsAutoInc { get; private set; }
-			public bool IsAutoGuid { get; private set; }
+			public bool IsAutoGuid { get; protected set; }
 
-			public bool IsPK { get; private set; }
+			public bool IsPK { get; protected set; }
 
 			public IEnumerable<IndexedAttribute> Indices { get; set; }
 
-			public bool IsNullable { get; private set; }
+			public bool IsNullable { get; protected set; }
 
-			public int? MaxStringLength { get; private set; }
+			public int? MaxStringLength { get; protected set; }
 
-			public bool StoreAsText { get; private set; }
+			public bool StoreAsText { get; protected set; }
 
+			protected Column () { }
 			public Column (PropertyInfo prop, CreateFlags createFlags = CreateFlags.None)
 			{
 				var colAttr = prop.CustomAttributes.FirstOrDefault (x => x.AttributeType == typeof (ColumnAttribute));
@@ -2614,7 +2570,7 @@ namespace SQLite
 				StoreAsText = prop.PropertyType.GetTypeInfo ().CustomAttributes.Any (x => x.AttributeType == typeof (StoreAsTextAttribute));
 			}
 
-			public void SetValue (object obj, object val)
+			public virtual void SetValue (object obj, object val)
 			{
 				if (val != null && ColumnType.GetTypeInfo ().IsEnum) {
 					_prop.SetValue (obj, Enum.ToObject (ColumnType, val));
@@ -2624,9 +2580,50 @@ namespace SQLite
 				}
 			}
 
-			public object GetValue (object obj)
+			public virtual object GetValue (object obj)
 			{
 				return _prop.GetValue (obj, null);
+			}
+		}
+
+		public class GuidColumn : Column
+		{
+			private Guid SyncGuid;
+			public GuidColumn () : base ()
+			{
+				Name = "SyncGuid";
+				//If this type is Nullable<T> then Nullable.GetUnderlyingType returns the T, otherwise it returns null, so get the actual type instead
+				ColumnType = typeof (Guid);
+				Collation = "";
+				IsPK = false;
+				IsAutoGuid = true;
+				IsNullable = false;
+				MaxStringLength = null;
+				StoreAsText = ColumnType.CustomAttributes.Any (x => x.AttributeType == typeof (StoreAsTextAttribute));
+				Indices = new IndexedAttribute[] { new IndexedAttribute (Name, -1) { Unique = true } };
+
+			}
+
+			public void SetValue ()
+			{
+				SyncGuid = Guid.NewGuid ();
+			}
+			public override void SetValue (object obj, object val)
+			{
+				if (val is Guid guid) {
+					SyncGuid = guid;
+					return;
+				}
+				SetValue ();
+			}
+
+			public Guid GetValue ()
+			{
+				return SyncGuid;
+			}
+			public override object GetValue (object obj)
+			{
+				return GetValue ();
 			}
 		}
 	}
@@ -3296,7 +3293,9 @@ namespace SQLite
 		internal static Action<T, Sqlite3Statement, int> GetFastSetter<T> (SQLiteConnection conn, TableMapping.Column column)
 		{
 			Action<T, Sqlite3Statement, int> fastSetter = null;
-
+			if (column.PropertyInfo is null) {
+				return null;
+			}
 			Type clrType = column.PropertyInfo.PropertyType;
 
 			var clrTypeInfo = clrType.GetTypeInfo ();
@@ -3311,7 +3310,7 @@ namespace SQLite
 				});
 			}
 			else if (clrType == typeof (Int32)) {
-				fastSetter = CreateNullableTypedSetterDelegate<T, int> (column, (stmt, index)=>{
+				fastSetter = CreateNullableTypedSetterDelegate<T, int> (column, (stmt, index) => {
 					return SQLite3.ColumnInt (stmt, index);
 				});
 			}
@@ -3327,7 +3326,7 @@ namespace SQLite
 			}
 			else if (clrType == typeof (float)) {
 				fastSetter = CreateNullableTypedSetterDelegate<T, float> (column, (stmt, index) => {
-					return (float) SQLite3.ColumnDouble (stmt, index);
+					return (float)SQLite3.ColumnDouble (stmt, index);
 				});
 			}
 			else if (clrType == typeof (TimeSpan)) {
@@ -3454,7 +3453,7 @@ namespace SQLite
 		/// <returns>A strongly-typed delegate</returns>
 		private static Action<ObjectType, Sqlite3Statement, int> CreateNullableTypedSetterDelegate<ObjectType, ColumnMemberType> (TableMapping.Column column, Func<Sqlite3Statement, int, ColumnMemberType> getColumnValue) where ColumnMemberType : struct
 		{
-			var clrTypeInfo = column.PropertyInfo.PropertyType.GetTypeInfo();
+			var clrTypeInfo = column.PropertyInfo.PropertyType.GetTypeInfo ();
 			bool isNullable = false;
 
 			if (clrTypeInfo.IsGenericType && clrTypeInfo.GetGenericTypeDefinition () == typeof (Nullable<>)) {

@@ -26,6 +26,11 @@
     <DocumentationFile>bin\Debug\netstandard2.0\SQLite-net.xml</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="Sync\**" />
+    <EmbeddedResource Remove="Sync\**" />
+    <None Remove="Sync\**" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.0.4" />
   </ItemGroup>
   <ItemGroup>
@@ -36,5 +41,8 @@
       <Link>SQLiteAsync.cs</Link>
     </Compile>
     <None Include="..\..\LICENSE.txt" Pack="true" PackagePath="" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\SQLBase\SQLBase.csproj" />
   </ItemGroup>
 </Project>

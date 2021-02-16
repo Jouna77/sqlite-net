@@ -109,5 +109,11 @@
     </Compile>
     <Compile Include="..\..\tests\SQLite.Tests\*.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\SQLBase\SQLBase.csproj">
+      <Project>{5DEEF79E-D738-49B7-939D-BF2C6F16E77A}</Project>
+      <Name>SQLBase</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath)\Xamarin\iOS\Xamarin.iOS.CSharp.targets" />
 </Project>

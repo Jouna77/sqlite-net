@@ -22,4 +22,8 @@
       <Link>SQLiteAsync.cs</Link>
     </Compile>
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SQLBase\SQLBase.csproj" />
+  </ItemGroup>
 </Project>

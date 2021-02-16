@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\nuget\SQLite-net-std\SQLite-net-std.csproj" />
+    <ProjectReference Include="..\..\SqlServer-net\SqlServer-net.csproj" />
+  </ItemGroup>
+
+</Project>
